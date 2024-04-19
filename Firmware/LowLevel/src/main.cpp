@@ -14,6 +14,11 @@
 // SOFTWARE.
 //
 //
+// Changes 18.04.2024 Elmar
+
+// floating average integrated for UBat, UCharge and ICharge Hardware added 3,9 kohm between F2 and GND to prevent voltage injection without loading voltage
+// added offset for analog voltage
+
 #include <NeoPixelConnect.h>
 #include <Arduino.h>
 #include <FastCRC.h>
@@ -24,6 +29,7 @@
 #include "imu.h"
 #include "debug.h"
 #include "nv_config.h"
+#include <floating_average.h>
 
 #ifdef ENABLE_SOUND_MODULE
 #include <soundsystem.h>
@@ -37,7 +43,7 @@
 #define TILT_EMERGENCY_MILLIS 2500  // Time for a single wheel to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
 #define LIFT_EMERGENCY_MILLIS 100  // Time for both wheels to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
 #define BUTTON_EMERGENCY_MILLIS 20 // Time for button emergency to activate. This is to debounce the button.
-
+#define ANALOG_MEAN_COUNT 20       // size of array for calculation meanvalues
 #define PACKET_SERIAL Serial1
 SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 
@@ -52,6 +58,7 @@ SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 #define VIN_R1 10000.0f
 #define VIN_R2 1000.0f
 #define R_SHUNT 0.003f
+#define ANALOG_VOLTAGE_OFFSET 21  // not investigated, but a/d shows an Offset 
 #define CURRENT_SENSE_GAIN 100.0f
 
 #define BATT_ABS_MAX 28.7f
@@ -69,6 +76,10 @@ uint8_t led_blink_counter = 0;
 PacketSerial packetSerial; // COBS communication PICO <> Raspi
 PacketSerial UISerial;     // COBS communication PICO UI-Board
 FastCRC16 CRC16;
+// floating average analog values objects
+FloatingAverage Vcharge_Mean;
+FloatingAverage VBatt_Mean;
+FloatingAverage Icharge_Mean;
 
 unsigned long last_imu_millis = 0;
 unsigned long last_status_update_millis = 0;
@@ -414,8 +425,13 @@ void setup() {
     sound_available = soundSystem::begin();
     if (sound_available) {
         p.neoPixelSetValue(0, 0, 0, 255, true);
+        
         soundSystem::setDFPis5V(nv_cfg->config_bitmask & NV_CONFIG_BIT_DFPIS5V);
+        soundSystem::setDFPis5V(true);
         soundSystem::setLanguage(&nv_cfg->language, true);
+        iso639_1 mylang = {'d', 'e'};   
+        soundSystem::setLanguage(&mylang, true);
+
         soundSystem::setVolume(nv_cfg->volume);
         // Do NOT play any initial sound now, as we've to handle the special case of
         // old DFPlayer SD-Card format @ DFROBOT LISP3. See soundSystem::processSounds()
@@ -479,6 +495,11 @@ void setup() {
 #endif
 
     status_message.status_bitmask |= 1;
+
+    // Init anlog values floating average 
+    Vcharge_Mean.begin(ANALOG_MEAN_COUNT);
+    VBatt_Mean.begin(ANALOG_MEAN_COUNT);
+    Icharge_Mean.begin(ANALOG_MEAN_COUNT);
 
     rp2040.resumeOtherCore();
 
@@ -619,6 +640,8 @@ void onPacketReceived(const uint8_t *buffer, size_t size) {
         (config_bitmask & LL_HIGH_LEVEL_CONFIG_BIT_DFPIS5V) ? nv_cfg->config_bitmask |= NV_CONFIG_BIT_DFPIS5V : nv_cfg->config_bitmask &= ~NV_CONFIG_BIT_DFPIS5V;
 #ifdef ENABLE_SOUND_MODULE
         soundSystem::setDFPis5V(nv_cfg->config_bitmask & NV_CONFIG_BIT_DFPIS5V);
+        soundSystem::setDFPis5V(true);
+       
 #endif
         // Volume
         if (pkt->volume >= 0) {
@@ -634,6 +657,8 @@ void onPacketReceived(const uint8_t *buffer, size_t size) {
         }
 #ifdef ENABLE_SOUND_MODULE
         soundSystem::setLanguage(&nv_cfg->language);
+        iso639_1 mylang = {'d', 'e'};   
+        soundSystem::setLanguage(&mylang, true);
 #endif
         // Sender requested a config-response packet
         if (buffer[0] == PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ)
@@ -715,15 +740,19 @@ void loop() {
     if (now - last_status_update_millis > STATUS_CYCLETIME) {
         updateNeopixel();
 
-        status_message.v_battery =
-                (float) analogRead(PIN_ANALOG_BATTERY_VOLTAGE) * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
-        status_message.v_charge =
-                (float) analogRead(PIN_ANALOG_CHARGE_VOLTAGE) * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
+        float ad_value = (float) (analogRead(PIN_ANALOG_BATTERY_VOLTAGE)-ANALOG_VOLTAGE_OFFSET) * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
+        // insert currtent value to mean floating array
+        VBatt_Mean.AddToFloatAvg(ad_value); 
+        ad_value = (float) (analogRead(PIN_ANALOG_CHARGE_VOLTAGE)-ANALOG_VOLTAGE_OFFSET) * (3.3f / 4096.0f) * ((VIN_R1 + VIN_R2) / VIN_R2);
+        // insert currtent value to mean floating array
+        Vcharge_Mean.AddToFloatAvg(ad_value); 
+        
 #ifndef IGNORE_CHARGING_CURRENT
-        status_message.charging_current =
-                (float) analogRead(PIN_ANALOG_CHARGE_CURRENT) * (3.3f / 4096.0f) / (CURRENT_SENSE_GAIN * R_SHUNT);
+        ad_value = (float) (analogRead(PIN_ANALOG_CHARGE_CURRENT)-ANALOG_VOLTAGE_OFFSET) * (3.3f / 4096.0f) / (CURRENT_SENSE_GAIN * R_SHUNT);
+        // insert currtent value to mean floating array
+        Icharge_Mean.AddToFloatAvg(ad_value); 
 #else
-        status_message.charging_current = -1.0f;
+        ad_value = -1.0f;
 #endif
         status_message.status_bitmask = (status_message.status_bitmask & 0b11111011) | ((charging_allowed & 0b1) << 2);
         status_message.status_bitmask = (status_message.status_bitmask & 0b11011111) | ((sound_available & 0b1) << 5);
@@ -763,6 +792,10 @@ void loop() {
     if (now > next_ui_msg_millis)
     {
         next_ui_msg_millis = now + ui_interval;
+        // calculate mean floating
+        if (float temp = Vcharge_Mean.GetFloatAvg(); temp < 0.02f) status_message.v_charge = 0.0f; else status_message.v_charge = temp;
+        if (float temp = Icharge_Mean.GetFloatAvg(); temp < 0.02f) status_message.charging_current = 0.0f; else status_message.charging_current = temp;
+        status_message.v_battery =VBatt_Mean.GetFloatAvg(); 
         manageUISubscriptions();
     }
 #ifdef ENABLE_SOUND_MODULE
