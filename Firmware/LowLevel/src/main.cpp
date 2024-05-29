@@ -149,11 +149,20 @@ void updateEmergency() {
     uint8_t last_emergency = status_message.emergency_bitmask & LL_EMERGENCY_BIT_LATCH;
 
     // Read & assign emergencies in the same manner as in ll_status.emergency_bitmask
-    uint8_t emergency_read = !gpio_get(PIN_EMERGENCY_3) << 1 | // Stop1
-                             !gpio_get(PIN_EMERGENCY_4) << 2 | // Stop2
-                             !gpio_get(PIN_EMERGENCY_1) << 3 | // Lift1
-                             !gpio_get(PIN_EMERGENCY_2) << 4 | // Lift2
-                             stock_ui_emergency_state; // OR with StockUI emergency
+    #ifdef WT901_INSTEAD_OF_SOUND // with this mower, the input singnal is inverted !!
+        uint8_t emergency_read = gpio_get(PIN_EMERGENCY_3) << 1 | // Stop1
+                                 gpio_get(PIN_EMERGENCY_4) << 2 | // Stop2
+                                 gpio_get(PIN_EMERGENCY_1) << 3 | // Lift1
+                                 gpio_get(PIN_EMERGENCY_2) << 4 | // Lift2
+                                 stock_ui_emergency_state; // OR with StockUI emergency
+    
+    #else
+        uint8_t emergency_read = !gpio_get(PIN_EMERGENCY_3) << 1 | // Stop1
+                                 !gpio_get(PIN_EMERGENCY_4) << 2 | // Stop2
+                                 !gpio_get(PIN_EMERGENCY_1) << 3 | // Lift1
+                                 !gpio_get(PIN_EMERGENCY_2) << 4 | // Lift2
+                                 stock_ui_emergency_state; // OR with StockUI emergency
+    #endif                         
     uint8_t emergency_state = 0;
 
     // Handle emergency "Stop" buttons
@@ -668,7 +677,18 @@ void onPacketReceived(const uint8_t *buffer, size_t size) {
 
 // returns true, if it's a good idea to charge the battery (current, voltages, ...)
 bool checkShouldCharge() {
-    return status_message.v_charge < 30.0 && status_message.charging_current < 1.5 && status_message.v_battery < 29.0;
+
+    bool retval = false;
+
+    if (status_message.v_charge < 30.0 && status_message.charging_current < 1.5 && status_message.v_battery < 29.0) {
+        status_message.status_bitmask |= LL_STATUS_BIT_CHARGE_ERROR;
+        retval = true;
+    }
+    else {
+        status_message.status_bitmask &= ~LL_STATUS_BIT_CHARGE_ERROR;
+    }
+
+    return(retval);
 }
 
 void updateChargingEnabled() {
@@ -793,7 +813,7 @@ void loop() {
     {
         next_ui_msg_millis = now + ui_interval;
         // calculate mean floating
-        if (float temp = Vcharge_Mean.GetFloatAvg(); temp < 0.02f) status_message.v_charge = 0.0f; else status_message.v_charge = temp;
+        if (float temp = Vcharge_Mean.GetFloatAvg(); temp < 0.50f)  status_message.v_charge = 0.0f; else status_message.v_charge = temp;
         if (float temp = Icharge_Mean.GetFloatAvg(); temp < 0.02f) status_message.charging_current = 0.0f; else status_message.charging_current = temp;
         status_message.v_battery =VBatt_Mean.GetFloatAvg(); 
         manageUISubscriptions();
