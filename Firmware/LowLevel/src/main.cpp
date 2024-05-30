@@ -67,6 +67,11 @@ SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 #define BATT_FULL BATT_ABS_MAX - 0.3f
 #define BATT_EMPTY BATT_ABS_Min + 0.3f
 
+//Values for chargecontrol set limits for overurrent and overvoltage
+#define CHARGE_MAX_CURRENT               1.5f  // max allowed loading current
+#define CHARGE_MAX_BATTERY_VOLTAGE      29.0f  // max allowed battery voltage
+#define CHARGE_MAX_CHARGE_VOLTAGE       30.0f  // max allowed charge voltage
+
 // Emergency will be engaged, if no heartbeat was received in this time frame.
 #define HEARTBEAT_MILLIS 500
 
@@ -680,12 +685,13 @@ bool checkShouldCharge() {
 
     bool retval = false;
 
-    if (status_message.v_charge < 30.0 && status_message.charging_current < 1.5 && status_message.v_battery < 29.0) {
-        status_message.status_bitmask |= LL_STATUS_BIT_CHARGE_ERROR;
+    if (status_message.v_charge < CHARGE_MAX_CHARGE_VOLTAGE && status_message.charging_current < CHARGE_MAX_CURRENT && status_message.v_battery < CHARGE_MAX_BATTERY_VOLTAGE) {
+        status_message.status_bitmask &= ~LL_STATUS_BIT_CHARGE_ERROR;
         retval = true;
     }
     else {
-        status_message.status_bitmask &= ~LL_STATUS_BIT_CHARGE_ERROR;
+        status_message.status_bitmask |= LL_STATUS_BIT_CHARGE_ERROR;
+        
     }
 
     return(retval);
