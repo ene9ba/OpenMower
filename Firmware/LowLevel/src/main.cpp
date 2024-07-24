@@ -44,6 +44,15 @@
 #define LIFT_EMERGENCY_MILLIS 100  // Time for both wheels to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
 #define BUTTON_EMERGENCY_MILLIS 20 // Time for button emergency to activate. This is to debounce the button.
 #define ANALOG_MEAN_COUNT 20       // size of array for calculation meanvalues
+
+// Define to stream debugging messages via USB
+// #define USB_DEBUG
+
+// Only define DEBUG_SERIAL if USB_DEBUG is actually enabled.
+// This enforces compile errors if it's used incorrectly.
+#ifdef USB_DEBUG
+#define DEBUG_SERIAL Serial
+#endif
 #define PACKET_SERIAL Serial1
 SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 
@@ -171,7 +180,7 @@ void updateEmergency() {
     uint8_t emergency_state = 0;
 
     // Handle emergency "Stop" buttons
-    if (emergency_read && LL_EMERGENCY_BITS_STOP) {
+    if (emergency_read & LL_EMERGENCY_BITS_STOP) {
         // If we just pressed, store the timestamp
         if (button_emergency_started == 0) {
             button_emergency_started = millis();
@@ -383,7 +392,9 @@ void setup() {
     //  Therefore, we pause the other core until setup() was a success
     rp2040.idleOtherCore();
 
-    DEBUG_BEGIN(9600);
+#ifdef USB_DEBUG
+    DEBUG_SERIAL.begin(9600);
+#endif  
 
     emergency_latch = true;
     ROS_running = false;
@@ -636,8 +647,10 @@ void onPacketReceived(const uint8_t *buffer, size_t size) {
         }
     } else if (buffer[0] == PACKET_ID_LL_HIGH_LEVEL_STATE && size == sizeof(struct ll_high_level_state)) {
         // copy the state
-        last_high_level_state = *((struct ll_high_level_state *)buffer);
-    } else if ((buffer[0] == PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ || buffer[0] == PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP) && size == sizeof(struct ll_high_level_config)) {
+        last_high_level_state = *((struct ll_high_level_state *) buffer);
+    }
+    else if ((buffer[0] == PACKET_ID_LL_HIGH_LEVEL_CONFIG_REQ || buffer[0] == PACKET_ID_LL_HIGH_LEVEL_CONFIG_RSP) && size == sizeof(struct ll_high_level_config)) 
+    {
         // Read and handle received config
         struct ll_high_level_config *pkt = (struct ll_high_level_config *)buffer;
         // Apply comms_version
@@ -721,17 +734,20 @@ void updateChargingEnabled() {
 
 void updateNeopixel() {
     led_blink_counter++;
-    // flash red on emergencies
-    if (emergency_latch && led_blink_counter & 0b10) {
-        p.neoPixelSetValue(0, 128, 0, 0, true);
+    
+    if (emergency_latch && led_blink_counter & 0b100) {  // slow blink on emergencies
+        p.neoPixelSetValue(0, 128, 0, 0, true);          // 1/2 red
     } else {
         if (ROS_running) {
-            // Green, if ROS is running
-            p.neoPixelSetValue(0, 0, 255, 0, true);
+            p.neoPixelSetValue(0, 0, 255, 0, true);  // green
         } else {
-            // Yellow, if it's not running
-            p.neoPixelSetValue(0, 255, 50, 0, true);
+            p.neoPixelSetValue(0, 255, 50, 0, true);  // yellow
         }
+#if defined(WT901) || defined(WT901_INSTEAD_OF_SOUND)
+        if (led_blink_counter & 0b10 && imu_comms_error()) {  // fast blink on communication error (condition order matters -> short-circuit evaluation)
+            p.neoPixelSetValue(0, 255, 0, 255, true);         // magenta
+        }
+#endif
     }
 }
 
