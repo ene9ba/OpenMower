@@ -14,10 +14,14 @@
 // SOFTWARE.
 //
 //
-// Changes 18.04.2024 Elmar
-
+// Changes 18.04.2024 ene9ba
+// Merge optimized Soundsystem by Apehaenger pull request #80
+// 
 // floating average integrated for UBat, UCharge and ICharge Hardware added 3,9 kohm between F2 and GND to prevent voltage injection without loading voltage
 // added offset for analog voltage
+//  
+// 27.07.2024 Merge Shutdown ESCs whe Idle (pull request#97) from olliewalsh
+//            Merge Bugfix/wt901 via SerialPIO (#96) from Apehaenger
 
 #include <NeoPixelConnect.h>
 #include <Arduino.h>
@@ -35,15 +39,17 @@
 #include <soundsystem.h>
 #endif
 
-#define IMU_CYCLETIME 20              // cycletime for refresh IMU data
-#define STATUS_CYCLETIME 100          // cycletime for refresh analog and digital Statusvalues
-#define UI_GET_VERSION_CYCLETIME 5000 // cycletime for UI Get_Version request (UI available check)
-#define UI_GET_VERSION_TIMEOUT 100    // timeout for UI Get_Version response (UI available check)
+#define IMU_CYCLETIME 20                // cycletime for refresh IMU data
+#define STATUS_CYCLETIME 100            // cycletime for refresh analog and digital Statusvalues
+#define UI_GET_VERSION_CYCLETIME 5000   // cycletime for UI Get_Version request (UI available check)
+#define UI_GET_VERSION_TIMEOUT 100      // timeout for UI Get_Version response (UI available check)
 
-#define TILT_EMERGENCY_MILLIS 2500  // Time for a single wheel to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
-#define LIFT_EMERGENCY_MILLIS 100  // Time for both wheels to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
-#define BUTTON_EMERGENCY_MILLIS 20 // Time for button emergency to activate. This is to debounce the button.
-#define ANALOG_MEAN_COUNT 20       // size of array for calculation meanvalues
+#define TILT_EMERGENCY_MILLIS 2500      // Time for a single wheel to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
+#define LIFT_EMERGENCY_MILLIS 100       // Time for both wheels to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
+#define BUTTON_EMERGENCY_MILLIS 20      // Time for button emergency to activate. This is to debounce the button.
+#define ANALOG_MEAN_COUNT 20            // size of array for calculation meanvalues
+
+#define SHUTDOWN_ESC_MAX_PITCH 15.0     // Do not shutdown ESCs if absolute pitch angle is greater than this
 
 // Define to stream debugging messages via USB
 // #define USB_DEBUG
@@ -70,16 +76,16 @@ SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 #define ANALOG_VOLTAGE_OFFSET 21  // not investigated, but a/d shows an Offset 
 #define CURRENT_SENSE_GAIN 100.0f
 
-#define BATT_ABS_MAX 28.7f
-#define BATT_ABS_Min 21.7f
+#define BATT_ABS_MAX 28.0f
+#define BATT_ABS_Min 24.0f
 
 #define BATT_FULL BATT_ABS_MAX - 0.3f
 #define BATT_EMPTY BATT_ABS_Min + 0.3f
 
 //Values for chargecontrol set limits for overurrent and overvoltage
 #define CHARGE_MAX_CURRENT               1.5f  // max allowed loading current
-#define CHARGE_MAX_BATTERY_VOLTAGE      29.0f  // max allowed battery voltage
-#define CHARGE_MAX_CHARGE_VOLTAGE       30.0f  // max allowed charge voltage
+#define CHARGE_MAX_BATTERY_VOLTAGE      28.0f  // max allowed battery voltage
+#define CHARGE_MAX_CHARGE_VOLTAGE       29.0f  // max allowed charge voltage
 
 // Emergency will be engaged, if no heartbeat was received in this time frame.
 #define HEARTBEAT_MILLIS 500
@@ -130,7 +136,9 @@ bool charging_allowed = false;
 bool ROS_running = false;
 unsigned long charging_disabled_time = 0;
 
+
 float imu_temp[9];
+float pitch_angle = 0, roll_angle = 0, tilt_angle = 0;
 
 uint16_t ui_version = 0;                   // Last received UI firmware version
 uint8_t ui_topic_bitmask = Topic_set_leds; // UI subscription, default to Set_LEDs
@@ -411,6 +419,12 @@ void setup() {
     pinMode(LED_BUILTIN, OUTPUT);
     pinMode(PIN_ENABLE_CHARGE, OUTPUT);
     digitalWrite(PIN_ENABLE_CHARGE, HIGH);
+
+    // set output ESC shutdown
+    pinMode(PIN_ESC_SHUTDOWN, OUTPUT);
+    digitalWrite(PIN_ESC_SHUTDOWN, LOW);
+
+
 
     gpio_init(PIN_RASPI_POWER);
     gpio_put(PIN_RASPI_POWER, true);
@@ -766,17 +780,23 @@ void loop() {
         imu_message.acceleration_mss[0] = imu_temp[0];
         imu_message.acceleration_mss[1] = imu_temp[1];
         imu_message.acceleration_mss[2] = imu_temp[2];
-        imu_message.gyro_rads[0] = imu_temp[3];
-        imu_message.gyro_rads[1] = imu_temp[4];
-        imu_message.gyro_rads[2] = imu_temp[5];
-        imu_message.mag_uT[0] = imu_temp[6];
-        imu_message.mag_uT[1] = imu_temp[7];
-        imu_message.mag_uT[2] = imu_temp[8];
+        imu_message.gyro_rads[0]        = imu_temp[3];
+        imu_message.gyro_rads[1]        = imu_temp[4];
+        imu_message.gyro_rads[2]        = imu_temp[5];
+        imu_message.mag_uT[0]           = imu_temp[6];
+        imu_message.mag_uT[1]           = imu_temp[7];
+        imu_message.mag_uT[2]           = imu_temp[8];
 
         imu_message.dt_millis = now - last_imu_millis;
         sendMessage(&imu_message, sizeof(struct ll_imu));
 
-        last_imu_millis = now;
+        // Update pitch, roll, tilt
+        pitch_angle = atan2f(imu_temp[0], imu_temp[2]) * 180.0f / M_PI;
+        roll_angle  = atan2f(imu_temp[1], imu_temp[2]) * 180.0f / M_PI;
+        float accXY = sqrtf((imu_temp[0]*imu_temp[0]) + (imu_temp[1]*imu_temp[1]));
+        tilt_angle  = atan2f(accXY, imu_temp[2]) * 180.0f / M_PI;
+
+       last_imu_millis = now;
     }
 
     if (now - last_status_update_millis > STATUS_CYCLETIME) {
@@ -796,8 +816,33 @@ void loop() {
 #else
         ad_value = -1.0f;
 #endif
+
+
+        
+
+#ifdef SHUTDOWN_ESC_WHEN_IDLE
+        // ESC power saving when mower is IDLE
+        
+        
+        if((ROS_running) && (fabs(pitch_angle) <= SHUTDOWN_ESC_MAX_PITCH) && (last_high_level_state.current_mode != HighLevelMode::MODE_IDLE))   {
+            // Enable escs if not idle, or if ROS is running, or on TILT and Mode is not idle
+            digitalWrite(PIN_ESC_SHUTDOWN, LOW);
+            //ToDo set this message state to a new statusbyte
+            //status_message.status_bitmask |= LL_STATUS_BIT_CHARGE_ERROR;
+        } else {
+            digitalWrite(PIN_ESC_SHUTDOWN, HIGH);
+            // Disable ESCs
+            //status_message.status_bitmask &= ~LL_STATUS_BIT_CHARGE_ERROR;
+        }
+#else
+        //status_message.status_bitmask |= 0b1000;  // ToDo Collision with charging error bit
+#endif
+
+
         status_message.status_bitmask = (status_message.status_bitmask & 0b11111011) | ((charging_allowed & 0b1) << 2);
         status_message.status_bitmask = (status_message.status_bitmask & 0b11011111) | ((sound_available & 0b1) << 5);
+
+
 
         // calculate percent value accu filling
         float delta = BATT_FULL - BATT_EMPTY;
