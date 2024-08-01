@@ -48,8 +48,9 @@
 #define LIFT_EMERGENCY_MILLIS 100       // Time for both wheels to be lifted in order to count as emergency (0 disable). This is to filter uneven ground.
 #define BUTTON_EMERGENCY_MILLIS 20      // Time for button emergency to activate. This is to debounce the button.
 #define ANALOG_MEAN_COUNT 20            // size of array for calculation meanvalues
+#define TILT_MEAN_COUNT   20            // size of array for calculation TILT-values   
 
-#define SHUTDOWN_ESC_MAX_PITCH 15.0     // Do not shutdown ESCs if absolute pitch angle is greater than this
+#define SHUTDOWN_ESC_MAX_PITCH 25.0     // Do not shutdown ESCs if absolute pitch angle is greater than this
 
 // Define to stream debugging messages via USB
 // #define USB_DEBUG
@@ -100,6 +101,7 @@ FastCRC16 CRC16;
 FloatingAverage Vcharge_Mean;
 FloatingAverage VBatt_Mean;
 FloatingAverage Icharge_Mean;
+FloatingAverage Tilt_Mean;
 
 unsigned long last_imu_millis = 0;
 unsigned long last_status_update_millis = 0;
@@ -120,6 +122,7 @@ bool stock_ui_rain = false;           // Get set by received Get_Rain packet
 // Predefined message buffers, so that we don't need to allocate new ones later.
 struct ll_imu imu_message = {0};
 struct ll_status status_message = {0};
+struct ll_status_extend status_message_extend = {0};
 // current high level state
 struct ll_high_level_state last_high_level_state = {0};
 
@@ -229,6 +232,13 @@ void updateEmergency() {
         (TILT_EMERGENCY_MILLIS > 0 && tilt_emergency_started > 0 && (millis() - tilt_emergency_started) >= TILT_EMERGENCY_MILLIS)) {
         emergency_state |= (emergency_read & LL_EMERGENCY_BITS_LIFT);
     }
+
+
+    // emergency if mower tilt angle to high 
+    if (fabs(Tilt_Mean.GetFloatAvg() > SHUTDOWN_ESC_MAX_PITCH)) {
+        emergency_state |= (emergency_read & LL_EMERGENCY_BIT_TILT);
+        }
+
 
     if (emergency_state || emergency_latch) {
         emergency_latch = true;
@@ -539,6 +549,7 @@ void setup() {
     Vcharge_Mean.begin(ANALOG_MEAN_COUNT);
     VBatt_Mean.begin(ANALOG_MEAN_COUNT);
     Icharge_Mean.begin(ANALOG_MEAN_COUNT);
+    Tilt_Mean.begin(TILT_MEAN_COUNT);
 
     rp2040.resumeOtherCore();
 
@@ -795,6 +806,7 @@ void loop() {
         roll_angle  = atan2f(imu_temp[1], imu_temp[2]) * 180.0f / M_PI;
         float accXY = sqrtf((imu_temp[0]*imu_temp[0]) + (imu_temp[1]*imu_temp[1]));
         tilt_angle  = atan2f(accXY, imu_temp[2]) * 180.0f / M_PI;
+        Tilt_Mean.AddToFloatAvg(tilt_angle);
 
        last_imu_millis = now;
     }
@@ -821,21 +833,26 @@ void loop() {
         
 
 #ifdef SHUTDOWN_ESC_WHEN_IDLE
+        uint8_t last_emergency = status_message.emergency_bitmask;
+
         // ESC power saving when mower is IDLE
-        
-        
-        if((ROS_running) && (fabs(pitch_angle) <= SHUTDOWN_ESC_MAX_PITCH) && (last_high_level_state.current_mode != HighLevelMode::MODE_IDLE))   {
+        float tmp =Tilt_Mean.GetFloatAvg();
+        if((ROS_running) && (fabs(Tilt_Mean.GetFloatAvg()) <= SHUTDOWN_ESC_MAX_PITCH) && (last_high_level_state.current_mode != HighLevelMode::MODE_IDLE))   {
             // Enable escs if not idle, or if ROS is running, or on TILT and Mode is not idle
             digitalWrite(PIN_ESC_SHUTDOWN, LOW);
-            //ToDo set this message state to a new statusbyte
-            //status_message.status_bitmask |= LL_STATUS_BIT_CHARGE_ERROR;
-        } else {
+            status_message_extend.state &= !LL_STATUS_EXT_BIT_ESC_KILLSWITCH;
+            
+        } 
+        else {
             digitalWrite(PIN_ESC_SHUTDOWN, HIGH);
-            // Disable ESCs
-            //status_message.status_bitmask &= ~LL_STATUS_BIT_CHARGE_ERROR;
+            status_message_extend.state |= LL_STATUS_EXT_BIT_ESC_KILLSWITCH;
+            
         }
-#else
-        //status_message.status_bitmask |= 0b1000;  // ToDo Collision with charging error bit
+        
+    
+        
+
+        
 #endif
 
 

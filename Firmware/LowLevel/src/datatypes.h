@@ -39,6 +39,7 @@ enum HighLevelMode {
 #define LL_EMERGENCY_BIT_HALL2 0b00010000 // Lift2
 #define LL_EMERGENCY_BIT_HALL3 0b00000010 // Stop1
 #define LL_EMERGENCY_BIT_HALL4 0b00000100 // Stop2
+#define LL_EMERGENCY_BIT_TILT  0b00100000 // TILT
 
 #define LL_EMERGENCY_BIT_LIFT1 LL_EMERGENCY_BIT_HALL1
 #define LL_EMERGENCY_BIT_LIFT2 LL_EMERGENCY_BIT_HALL2
@@ -47,6 +48,7 @@ enum HighLevelMode {
 #define LL_EMERGENCY_BIT_STOP2 LL_EMERGENCY_BIT_HALL4
 #define LL_EMERGENCY_BITS_STOP (LL_EMERGENCY_BIT_STOP1 | LL_EMERGENCY_BIT_STOP2)
 
+// ll_status
 #define LL_STATUS_BIT_INITIALIZED   0b00000001
 #define LL_STATUS_BIT_RASPI_POWER   0b00000010
 #define LL_STATUS_BIT_CHARGING      0b00000100
@@ -55,6 +57,9 @@ enum HighLevelMode {
 #define LL_STATUS_BIT_SOUND_AVAIL   0b00100000
 #define LL_STATUS_BIT_SOUND_BUSY    0b01000000
 #define LL_STATUS_BIT_UI_AVAIL      0b10000000
+
+// ll_status_extend
+#define LL_STATUS_EXT_BIT_ESC_KILLSWITCH   0b00000001
 
 #pragma pack(push, 1)
 struct ll_status {
@@ -78,6 +83,7 @@ struct ll_status {
     // Bit 2: Emergency/Hall 4 (Stop2) active
     // Bit 3: Emergency/Hall 1 (Lift1) active
     // Bit 4: Emergency/Hall 2 (Lift2) active
+    // Bit 5: Emergency/TILT   mower not in a horizontal position
     uint8_t emergency_bitmask;
     // Charge voltage
     float v_charge;
@@ -86,6 +92,28 @@ struct ll_status {
     // Charge current
     float charging_current;
     uint8_t batt_percentage;
+    uint16_t crc;
+} __attribute__((packed));
+#pragma pack(pop)
+
+
+#pragma pack(push, 1)
+struct ll_status_extend {
+    // Type of this message. Has to be PACKET_ID_LL_STATUS.
+    uint8_t type;
+    uint8_t state;
+    // Bitmask for addon states
+    // Bit 0: ESCs Power shut down
+    // Bit 1: 
+    // Bit 2: 
+    // Bit 3: 
+    // Bit 4: 
+    // Bit 5: 
+    // Bit 6: 
+    // Bit 7: 
+    uint8_t state1;
+    // Reserved floats
+    float floatvalue[5];
     uint16_t crc;
 } __attribute__((packed));
 #pragma pack(pop)
