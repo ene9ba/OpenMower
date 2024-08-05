@@ -77,8 +77,8 @@ SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 #define ANALOG_VOLTAGE_OFFSET 21  // not investigated, but a/d shows an Offset 
 #define CURRENT_SENSE_GAIN 100.0f
 
-#define BATT_ABS_MAX 28.0f
-#define BATT_ABS_Min 24.0f
+#define BATT_ABS_MAX 28.7f
+#define BATT_ABS_Min 21.7f
 
 #define BATT_FULL BATT_ABS_MAX - 0.3f
 #define BATT_EMPTY BATT_ABS_Min + 0.3f
@@ -86,7 +86,7 @@ SerialPIO uiSerial(PIN_UI_TX, PIN_UI_RX, 250);
 //Values for chargecontrol set limits for overurrent and overvoltage
 #define CHARGE_MAX_CURRENT               1.5f  // max allowed loading current
 #define CHARGE_MAX_BATTERY_VOLTAGE      28.0f  // max allowed battery voltage
-#define CHARGE_MAX_CHARGE_VOLTAGE       29.0f  // max allowed charge voltage
+#define CHARGE_MAX_CHARGE_VOLTAGE       29.9f  // max allowed charge voltage
 
 // Emergency will be engaged, if no heartbeat was received in this time frame.
 #define HEARTBEAT_MILLIS 500
